@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# Run outputs and state - these live with the data in the Drive folder, not in the code repo
+*.log
+conversion_report.md
+run_health.json
+backfill_state.json
+NEEDS_ATTENTION.md
+_tmp_download.pdf
+rag/index/
