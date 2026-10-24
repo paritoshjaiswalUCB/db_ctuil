@@ -21,8 +21,8 @@ import yaml
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import KB_ROOT as KB_DIR  # noqa: E402
-INDEX_DIR = Path(__file__).resolve().parent / "index"
+from config import KB_ROOT as KB_DIR, SYSTEM_DIR  # noqa: E402
+INDEX_DIR = SYSTEM_DIR / "rag_index"
 EMBEDDINGS_FILE = INDEX_DIR / "embeddings.npy"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 MANIFEST_FILE = INDEX_DIR / "manifest.json"  # source_file -> mtime at last embed
@@ -89,7 +89,7 @@ def load_existing_index():
 
 
 def build():
-    md_files = sorted(p for p in KB_DIR.glob("*.md") if p.name != "README.md")
+    md_files = sorted(p for p in KB_DIR.glob("*.md") if p.name not in ("README.md", "NEEDS_ATTENTION.md"))
     print(f"Found {len(md_files)} markdown files in {KB_DIR}")
 
     existing_embeddings, existing_chunks, manifest = load_existing_index()

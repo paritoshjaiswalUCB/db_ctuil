@@ -13,6 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 KB_ROOT = Path(os.environ.get("KB_ROOT", r"G:\My Drive\db_cmets_meetings"))
 GNA_DIR = KB_ROOT / "gna"
+SYSTEM_DIR = KB_ROOT / "_system"  # state, history and index files that travel with the data
 
 _WINDOWS_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 

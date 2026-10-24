@@ -1,0 +1,94 @@
+# Weekly refresh of the CTUIL knowledge base, run on GitHub's machines.
+#
+# Google Drive (db_cmets_meetings) stays the master copy: the job pulls it down
+# with rclone, runs the pipeline against the local copy, and pushes new or
+# changed files back. Nothing is ever deleted on Drive except a cleared
+# NEEDS_ATTENTION.md. The RCLONE_CONF secret holds the Drive sign-in.
+
+name: Weekly update
+
+on:
+  schedule:
+    - cron: "30 5 * * 2"  # Tuesday 05:30 UTC = 11:00 IST
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/weekly-update.yml"]
+
+concurrency:
+  group: weekly-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      KB_ROOT: ${{ github.workspace }}/kb
+      DRIVE_PATH: "gdrive:db_cmets_meetings"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q tesseract-ocr rclone
+
+      - name: Install Python packages
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Configure Drive access
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+
+      - name: Pull knowledge base from Drive
+        run: rclone copy "$DRIVE_PATH" "$KB_ROOT" --transfers 8 --stats-one-line --stats 30s
+
+      - name: Download and convert new PDFs
+        timeout-minutes: 300  # leaves time for the upload step to save partial progress
+        run: python bot.py
+
+      - name: Update search index
+        if: always()
+        run: python rag/build_index.py
+
+      - name: Health check
+        if: always()
+        run: python check_health.py
+
+      - name: Push changes back to Drive
+        if: always()
+        run: |
+          rclone copy "$KB_ROOT" "$DRIVE_PATH" --transfers 8 --stats-one-line --stats 30s
+          if [ ! -f "$KB_ROOT/NEEDS_ATTENTION.md" ]; then
+            rclone deletefile "$DRIVE_PATH/NEEDS_ATTENTION.md" 2>/dev/null || true
+          fi
+
+      - name: Keep run log and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_number }}
+          path: |
+            conversion.log
+            conversion_report.md
+          if-no-files-found: ignore
+
+      - name: Fail the run if something needs attention
+        if: always()
+        run: |
+          if [ -f "$KB_ROOT/NEEDS_ATTENTION.md" ]; then
+            cat "$KB_ROOT/NEEDS_ATTENTION.md"
+            exit 1
+          fi

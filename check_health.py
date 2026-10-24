@@ -21,9 +21,9 @@ over from a previous run so old alerts don't linger after the problem clears.
 import json
 import re
 from datetime import datetime
-from config import BASE_DIR, KB_ROOT
+from config import BASE_DIR, KB_ROOT, SYSTEM_DIR
 REPORT_FILE = BASE_DIR / "conversion_report.md"
-HEALTH_FILE = BASE_DIR / "run_health.json"
+HEALTH_FILE = SYSTEM_DIR / "run_health.json"
 ALERT_FILE_LOCAL = BASE_DIR / "NEEDS_ATTENTION.md"
 ALERT_FILE_DRIVE = KB_ROOT / "NEEDS_ATTENTION.md"
 
@@ -54,6 +54,7 @@ def load_history():
 
 
 def save_history(history):
+    HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
     HEALTH_FILE.write_text(json.dumps(history[-MAX_HISTORY:], indent=2), encoding="utf-8")
 
 

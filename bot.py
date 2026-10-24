@@ -22,8 +22,8 @@ from pathlib import Path
 import requests
 import yaml
 
-from adapters import ctu
-from config import BASE_DIR, KB_ROOT, tesseract_cmd
+from adapters import ctu, ctu_gna
+from config import BASE_DIR, GNA_DIR, KB_ROOT, SYSTEM_DIR, tesseract_cmd
 
 # ---------------------------------------------------------------------------
 # Config
@@ -36,6 +36,7 @@ OUTPUT_DIR = KB_ROOT
 
 ADAPTERS = {
     "CTU": ctu,
+    "CTU_GNA": ctu_gna,
 }
 
 DOWNLOAD_HEADERS = {
@@ -262,6 +263,15 @@ def write_markdown_with_frontmatter(output_path, markdown_text, frontmatter):
     output_path.write_text(content, encoding="utf-8")
 
 
+def output_dir_for(adapter, repository, url):
+    """CMETS minutes stay at the top of the Drive folder (unchanged layout);
+    GNA and transmission-status documents go under gna/documents/<source>/."""
+    if repository == "CTU":
+        return OUTPUT_DIR
+    sub = adapter.output_subdir(url) if hasattr(adapter, "output_subdir") else repository.lower()
+    return GNA_DIR / "documents" / sub
+
+
 def load_converted_urls():
     """Set of original_url values already present in the output folder.
 
@@ -271,7 +281,9 @@ def load_converted_urls():
     if not OUTPUT_DIR.exists():
         return set()
     urls = set()
-    for path in OUTPUT_DIR.glob("*.md"):
+    for path in OUTPUT_DIR.rglob("*.md"):
+        if "_system" in path.parts:
+            continue
         url = existing_original_url(path)
         if url:
             urls.add(url)
@@ -308,6 +320,7 @@ def process_row(row_index, url, repository, report):
 
     logger.info(f"Discovered {len(pdf_urls)} PDF(s).")
 
+    out_dir = output_dir_for(adapter, repository, url)
     already_converted = load_converted_urls()
 
     row_report = {
@@ -346,6 +359,7 @@ def process_row(row_index, url, repository, report):
 
             frontmatter = {
                 "source": repository,
+                "source_page": url,
                 "original_url": pdf_url,
                 "converted_date": date.today().isoformat(),
                 "title": metadata["title"],
@@ -354,9 +368,9 @@ def process_row(row_index, url, repository, report):
                 "needs_review": needs_review,
             }
 
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
             filename = build_filename(repository, metadata["title"])
-            output_path = OUTPUT_DIR / filename
+            output_path = out_dir / filename
 
             # Re-running the bot on the same source URL should overwrite the
             # existing file, not pile up numbered duplicates. Only treat it
@@ -364,7 +378,7 @@ def process_row(row_index, url, repository, report):
             # same slug) when the existing file's original_url differs.
             counter = 2
             while output_path.exists() and existing_original_url(output_path) != pdf_url:
-                output_path = OUTPUT_DIR / f"{filename[:-3]}-{counter}.md"
+                output_path = out_dir / f"{filename[:-3]}-{counter}.md"
                 counter += 1
 
             write_markdown_with_frontmatter(output_path, markdown_text, frontmatter)
@@ -396,7 +410,7 @@ def write_report(report):
     lines.append(f"- Newly converted successfully: {total_succeeded}")
     lines.append(f"- Failed: {total_failed}")
 
-    backfill_state_file = BASE_DIR / "backfill_state.json"
+    backfill_state_file = SYSTEM_DIR / "backfill_state.json"
     if backfill_state_file.exists():
         try:
             cutoff = json.loads(backfill_state_file.read_text(encoding="utf-8"))["min_date"]

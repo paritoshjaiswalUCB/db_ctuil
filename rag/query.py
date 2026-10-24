@@ -19,7 +19,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-INDEX_DIR = Path(__file__).resolve().parent / "index"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import SYSTEM_DIR  # noqa: E402
+INDEX_DIR = SYSTEM_DIR / "rag_index"
 EMBEDDINGS_FILE = INDEX_DIR / "embeddings.npy"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
 
@@ -41,7 +43,7 @@ def load_index():
             f"Index not found at {INDEX_DIR}. Run build_index.py first."
         )
     embeddings = np.load(EMBEDDINGS_FILE)
-    chunks = json.loads(CHUNKS_FILE.read_text(encoding="utf-8"))
+    chunks = json.loads(CHUNKS_FILE.read_bytes())  # bytes skip an extra in-memory text copy of a ~40 MB file
     return embeddings, chunks
 
 

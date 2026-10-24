@@ -78,8 +78,8 @@ def normalize_substation(name):
     system_identified = "yet to be identified" not in s
     s = re.sub(r"\(system yet to be identified\)", " ", s)
     s = s.replace("*", " ")
-    s = re.sub(r"\(gis\)|\bs/s\b|\bsubstation\b|\bpooling station\b", " ", s)
-    s = re.sub(r"\bps\b", " ", s)
+    s = re.sub(r"\(gis\)|\(pg\)|\bs/s\b|\bss\b|\bsubstation\b|\bpooling station\b|\bpooling\b", " ", s)
+    s = re.sub(r"\bists\b|\bps\b|\b\d{3}/\d{3}\s*kv\b|\b\d{3}\s*kv\b", " ", s)
     s = re.sub(r"\(\s*sec[\s\-]*(i{1,3}|iv|v)\s*\)", lambda m: f" sec {ROMAN[m.group(1)]}", s)
     s = re.sub(r"\(new\)", " new", s)
     s = _roman_suffix_to_digit(s)

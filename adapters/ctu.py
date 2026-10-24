@@ -22,6 +22,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from config import SYSTEM_DIR
+
 LISTING_URL = "https://ctuil.in/ists-consultation-meeting"
 AJAX_URL = "https://ctuil.in/ists-consultation-meeting?p=ajax"
 ARCHIVE_LISTING_URL = "https://ctuil.in/ists-consultation-meeting/archive"
@@ -37,7 +39,7 @@ BASE_URL = "https://ctuil.in"
 # so widening the window costs nothing for dates already covered - only the
 # newly-exposed older documents get downloaded and OCR'd each week. State
 # (the current cutoff) persists in a small JSON file next to this project.
-BACKFILL_STATE_FILE = Path(__file__).resolve().parent.parent / "backfill_state.json"
+BACKFILL_STATE_FILE = SYSTEM_DIR / "backfill_state.json"
 INITIAL_MIN_DATE = datetime(2025, 1, 1)
 BACKFILL_STEP_DAYS = 100  # ~3.3 months back per run - >1 year back within 3-4 weekly runs
 BACKFILL_FLOOR_DATE = datetime(2021, 1, 1)  # confirmed start of CTU's published CMETS history (two
@@ -61,6 +63,7 @@ def _load_and_advance_min_date():
     else:
         new_min = max(current_min - timedelta(days=BACKFILL_STEP_DAYS), BACKFILL_FLOOR_DATE)
 
+    BACKFILL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     BACKFILL_STATE_FILE.write_text(
         json.dumps({"min_date": new_min.strftime("%Y-%m-%d")}, indent=2),
         encoding="utf-8",
