@@ -12,6 +12,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from adapters.ctu import escape_bare_ampersands
+
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 BASE_URL = "https://ctuil.in"
 CONTENT_SELECTOR = "section.regionsTabsSection"
@@ -49,7 +51,7 @@ def discover_pdfs(url):
 
     resp = requests.get(url, headers={"User-Agent": UA, "Referer": BASE_URL + "/"}, timeout=60)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(escape_bare_ampersands(resp.text), "html.parser")
     content = soup.select_one(CONTENT_SELECTOR)
     if content is None:
         raise RuntimeError(f"content area '{CONTENT_SELECTOR}' not found on {url} - page layout may have changed")

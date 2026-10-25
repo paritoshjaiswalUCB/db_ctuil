@@ -46,6 +46,13 @@ BACKFILL_FLOOR_DATE = datetime(2021, 1, 1)  # confirmed start of CTU's published
 # consecutive empty discovery runs below 2021-03-03 on 2026-10-09) - stop pushing back further
 
 
+def escape_bare_ampersands(html):
+    """CTU file names contain raw '&' (e.g. "Conn&LTA_Minutes..."). html.parser
+    reads "&LT" as the legacy entity '<' and corrupts the link, so escape any
+    '&' that doesn't start a complete entity before parsing."""
+    return re.sub(r"&(?![A-Za-z][A-Za-z0-9]*;|#\d+;|#[xX][0-9A-Fa-f]+;)", "&amp;", html)
+
+
 def _load_and_advance_min_date():
     """Return this run's cutoff date, pushing it further into the past and
     persisting the new value for next time."""
@@ -142,7 +149,7 @@ def _scan_listing(ajax_url, referer, archive_value, min_date):
         resp.raise_for_status()
         html = resp.text
 
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(escape_bare_ampersands(html), "html.parser")
         rows = soup.select("table.tableStyle tr")
 
         data_rows = [r for r in rows if r.find("td") is not None]
