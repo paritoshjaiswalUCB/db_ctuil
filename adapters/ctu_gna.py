@@ -35,6 +35,24 @@ SOURCE_SUBDIRS = {
 }
 
 
+def convert_pdf(pdf_path):
+    """Markdown with real tables, or None to let bot.py use its plain text/OCR path.
+
+    GNA documents are mostly long tables; plain text extraction runs the cells
+    together and loses which value belongs to which column.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "gna"))
+    from substation_tables import pdf_to_markdown_tables
+
+    try:
+        return pdf_to_markdown_tables(pdf_path)
+    except Exception:  # noqa: BLE001 - odd PDF layouts fall back to the plain converter
+        return None
+
+
 def _page_key(url):
     return urlparse(url).path.strip("/").lower()
 

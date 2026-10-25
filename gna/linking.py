@@ -79,12 +79,20 @@ def normalize_substation(name):
     s = re.sub(r"\(system yet to be identified\)", " ", s)
     s = s.replace("*", " ")
     s = re.sub(r"\(gis\)|\(pg\)|\bs/s\b|\bss\b|\bsubstation\b|\bpooling station\b|\bpooling\b", " ", s)
+    # "(220 kV Bus Section-I)", "(400kV Sec-I)", "(Sec- I)" all mean the same section
+    s = re.sub(r"\(\s*(?:\d{3}\s*(?:kv)?\s*)?(?:bus\s*)?sec(?:tion)?[\s\-]*(i{1,3}|iv|v)\s*\)",
+               lambda m: f" sec {ROMAN[m.group(1)]}", s)
     s = re.sub(r"\bists\b|\bps\b|\b\d{3}/\d{3}\s*kv\b|\b\d{3}\s*kv\b", " ", s)
-    s = re.sub(r"\(\s*sec[\s\-]*(i{1,3}|iv|v)\s*\)", lambda m: f" sec {ROMAN[m.group(1)]}", s)
     s = re.sub(r"\(new\)", " new", s)
     s = _roman_suffix_to_digit(s)
     s = re.sub(r"[^a-z0-9 ]+", " ", s)
     return re.sub(r"\s+", " ", s).strip(), system_identified
+
+
+def compact_key(key):
+    """Space-free form of a substation key. PDF extraction sometimes splits a
+    word ("Bikane r"), so keys from tables are compared in this form."""
+    return key.replace(" ", "")
 
 
 def substation_text_pattern(key):
@@ -97,7 +105,8 @@ def substation_text_pattern(key):
 
 def normalize_text_for_substations(text):
     s = (text or "").lower()
-    s = re.sub(r"\(\s*sec[\s\-]*(i{1,3}|iv|v)\s*\)", lambda m: f" sec {ROMAN[m.group(1)]}", s)
+    s = re.sub(r"\(\s*(?:\d{3}\s*kv\s*)?(?:bus\s*)?sec(?:tion)?[\s\-]*(i{1,3}|iv|v)\s*\)",
+               lambda m: f" sec {ROMAN[m.group(1)]}", s)
     s = _roman_suffix_to_digit(s)
     s = re.sub(r"[^a-z0-9 \-]+", " ", s)
     return re.sub(r"\s+", " ", s)

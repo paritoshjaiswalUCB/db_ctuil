@@ -344,7 +344,11 @@ def process_row(row_index, url, repository, report):
             tmp_pdf_path.write_bytes(pdf_bytes)
 
             try:
-                markdown_text, used_ocr = convert_pdf_to_markdown(tmp_pdf_path)
+                table_markdown = adapter.convert_pdf(tmp_pdf_path) if hasattr(adapter, "convert_pdf") else None
+                if table_markdown:
+                    markdown_text, used_ocr = table_markdown, False
+                else:
+                    markdown_text, used_ocr = convert_pdf_to_markdown(tmp_pdf_path)
             finally:
                 tmp_pdf_path.unlink(missing_ok=True)
 
