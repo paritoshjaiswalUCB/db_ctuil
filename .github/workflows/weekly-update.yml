@@ -59,6 +59,15 @@ jobs:
         timeout-minutes: 300  # leaves time for the upload step to save partial progress
         run: python bot.py
 
+      - name: Refresh application cards
+        run: python gna/application_cards.py
+
+      - name: Refresh substation cards
+        run: python gna/substation_cards.py
+
+      - name: Link documents to applications, applicants and substations
+        run: python gna/link_documents.py
+
       - name: Update search index
         if: always()
         run: python rag/build_index.py

@@ -36,15 +36,50 @@ CHUNK_OVERLAP_WORDS = 40
 
 def parse_markdown_file(path):
     text = path.read_text(encoding="utf-8")
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    if not text.startswith("---\n"):
         return {}, text
-    frontmatter = yaml.safe_load(parts[1]) or {}
-    body = parts[2].strip()
-    return frontmatter, body
+    end = text.find("\n---\n", 4)  # the frontmatter's closing line, not a table's |---| row
+    if end == -1:
+        return {}, text
+    frontmatter = yaml.safe_load(text[4:end]) or {}
+    return frontmatter, text[end + 5:].strip()
+
+
+def chunk_table_text(body):
+    """Chunk a body that contains markdown tables by whole rows, repeating the
+    table's header at the top of every chunk so a row is never cut loose from
+    its column names. Non-table lines are chunked as they come."""
+    chunks, current, size, header = [], [], 0, []
+
+    def flush():
+        nonlocal current, size
+        if current:
+            has_header = bool(header) and current[0] == header[0]
+            chunks.append("\n".join(current if has_header or not header else header + current))
+        current, size = [], 0
+
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        is_row = line.startswith("|")
+        if is_row and i + 1 < len(lines) and lines[i + 1].startswith("|---"):
+            flush()
+            header = [line, lines[i + 1]]  # a new table starts here
+        elif not is_row:
+            if header:
+                flush()
+            header = []
+        words = len(line.split())
+        if size + words > CHUNK_WORDS and current:
+            flush()
+        current.append(line)
+        size += words
+    flush()
+    return [c for c in chunks if c.strip()]
 
 
 def chunk_text(body):
+    if re.search(r"^\|---", body, re.M):
+        return chunk_table_text(body)
     words = body.split()
     if not words:
         return []
@@ -60,6 +95,19 @@ def chunk_text(body):
     return chunks
 
 
+def source_key(path):
+    """Path relative to the knowledge-base folder (top-level files keep their plain name)."""
+    return path.relative_to(KB_DIR).as_posix()
+
+
+def kb_markdown_files():
+    skip_dirs = {"_system", "snapshots"}
+    return sorted(
+        p for p in KB_DIR.rglob("*.md")
+        if p.name not in ("README.md", "NEEDS_ATTENTION.md") and not (skip_dirs & set(p.relative_to(KB_DIR).parts))
+    )
+
+
 def chunks_for_file(path):
     frontmatter, body = parse_markdown_file(path)
     body = re.sub(r"\n{3,}", "\n\n", body)
@@ -67,8 +115,9 @@ def chunks_for_file(path):
     return [
         {
             "text": piece,
-            "source_file": path.name,
-            "title": frontmatter.get("title", ""),
+            "source_file": source_key(path),
+            "type": frontmatter.get("type") or frontmatter.get("source", ""),
+            "title": frontmatter.get("title") or frontmatter.get("substation") or frontmatter.get("application_id", ""),
             "date": frontmatter.get("date", ""),
             "doc_reference": frontmatter.get("doc_reference", ""),
             "original_url": frontmatter.get("original_url", ""),
@@ -89,15 +138,15 @@ def load_existing_index():
 
 
 def build():
-    md_files = sorted(p for p in KB_DIR.glob("*.md") if p.name not in ("README.md", "NEEDS_ATTENTION.md"))
+    md_files = kb_markdown_files()
     print(f"Found {len(md_files)} markdown files in {KB_DIR}")
 
     existing_embeddings, existing_chunks, manifest = load_existing_index()
-    current_mtimes = {p.name: p.stat().st_mtime for p in md_files}
+    current_mtimes = {source_key(p): p.stat().st_mtime for p in md_files}
 
     changed_files = [
         p for p in md_files
-        if p.name not in manifest or manifest[p.name] != current_mtimes[p.name]
+        if source_key(p) not in manifest or manifest[source_key(p)] != current_mtimes[source_key(p)]
     ]
     removed_names = set(manifest) - set(current_mtimes)
 
@@ -107,7 +156,7 @@ def build():
 
     print(f"{len(changed_files)} new/changed file(s), {len(removed_names)} removed file(s).")
 
-    stale_names = {p.name for p in changed_files} | removed_names
+    stale_names = {source_key(p) for p in changed_files} | removed_names
     keep_mask = np.array([c["source_file"] not in stale_names for c in existing_chunks], dtype=bool)
     kept_chunks = [c for c, keep in zip(existing_chunks, keep_mask) if keep]
     kept_embeddings = existing_embeddings[keep_mask] if len(existing_chunks) else existing_embeddings
@@ -135,11 +184,11 @@ def build():
     for name in removed_names:
         manifest.pop(name, None)
     for p in changed_files:
-        manifest[p.name] = current_mtimes[p.name]
+        manifest[source_key(p)] = current_mtimes[source_key(p)]
 
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
     np.save(EMBEDDINGS_FILE, all_embeddings)
-    CHUNKS_FILE.write_text(json.dumps(all_chunks, ensure_ascii=False, indent=2), encoding="utf-8")
+    CHUNKS_FILE.write_text(json.dumps(all_chunks, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     MANIFEST_FILE.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"Saved index: {EMBEDDINGS_FILE} ({all_embeddings.shape}), {CHUNKS_FILE} ({len(all_chunks)} chunks)")

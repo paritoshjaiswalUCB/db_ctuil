@@ -20,7 +20,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import SYSTEM_DIR  # noqa: E402
+from config import KB_ROOT, SYSTEM_DIR  # noqa: E402
 INDEX_DIR = SYSTEM_DIR / "rag_index"
 EMBEDDINGS_FILE = INDEX_DIR / "embeddings.npy"
 CHUNKS_FILE = INDEX_DIR / "chunks.json"
@@ -62,6 +62,8 @@ def search(question, top_k=8):
             {
                 "score": round(float(scores[idx]), 4),
                 "source_file": chunk["source_file"],
+                "full_path": str(KB_ROOT / chunk["source_file"]),  # open this for the whole document or card
+                "type": chunk.get("type", ""),
                 "title": chunk["title"],
                 "date": chunk["date"],
                 "doc_reference": chunk["doc_reference"],
