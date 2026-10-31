@@ -5,7 +5,9 @@ rolling history file, and decides whether anything looks wrong:
 
   1. Any conversion failures in this run (a PDF was found but couldn't be
      downloaded/converted) - alerts immediately, every time it happens.
-  2. Zero newly-converted documents for several consecutive runs in a row
+  2. New pages on ctuil.in, or a collected page that suddenly lists nothing
+     (see site_watch.py).
+  3. Zero newly-converted documents for several consecutive runs in a row
      (default: 3) - on its own this can be normal (new minutes are
      infrequent), but a long enough streak of zero new OR zero discovered
      is also what you'd see if CTU changed their site and the scraper quietly
@@ -21,6 +23,8 @@ over from a previous run so old alerts don't linger after the problem clears.
 import json
 import re
 from datetime import datetime
+
+import site_watch
 from config import BASE_DIR, KB_ROOT, SYSTEM_DIR
 REPORT_FILE = BASE_DIR / "conversion_report.md"
 HEALTH_FILE = SYSTEM_DIR / "run_health.json"
@@ -89,6 +93,11 @@ def main():
             f"{this_run['failed']} PDF(s) failed to convert in this run. "
             f"Check conversion.log / conversion_report.md for the error details."
         )
+
+    try:
+        problems.extend(site_watch.check())
+    except Exception as exc:  # a site hiccup should not fail the whole run
+        print(f"(site check skipped: {exc})")
 
     recent = history[-ZERO_NEW_STREAK_THRESHOLD:]
     if len(recent) == ZERO_NEW_STREAK_THRESHOLD and all(r["succeeded"] == 0 for r in recent):
