@@ -5,8 +5,9 @@ CEA lists each committee's meetings through a JSON feed, one feed per committee:
     https://cea.nic.in/api/public/link-report/getByMappingId/<mapping id>
 
 Each row in urls.csv (repository CEA) is one of those feed URLs. From every meeting we
-collect the English minutes of the meeting and any corrigendum / amendment; agendas and
-attachments are not collected. Files are fetched through CEA's file endpoint.
+collect the English minutes of the meeting, any corrigendum / amendment, and the attachments
+(additional agendas, agenda and minutes annexures, additional minutes). The main agenda,
+meeting notice and Hindi versions are not collected. Files are fetched through CEA's file endpoint.
 
 bot.py asks this module for the title and extra frontmatter of each file
 (title_for / extra_frontmatter), because the file URL itself carries no readable name.
@@ -24,17 +25,17 @@ BASE_URL = "https://cea.nic.in"
 COMMITTEES = {
     "377": ("nct", "NCT", "National Committee on Transmission"),
     "440": ("npc", "NPC", "National Power Committee"),
-    "620": ("rpc_tp_all_india", "All India Joint Standing Committee",
+    "620": ("rpc_tp_all_india", "All India",
             "All India Joint Standing Committee on Power System Planning"),
-    "621": ("rpc_tp_nr", "NR RPC(TP)/Standing Committee",
+    "621": ("rpc_tp_nr", "NR",
             "Northern Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
-    "622": ("rpc_tp_wr", "WR RPC(TP)/Standing Committee",
+    "622": ("rpc_tp_wr", "WR",
             "Western Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
-    "623": ("rpc_tp_sr", "SR RPC(TP)/Standing Committee",
+    "623": ("rpc_tp_sr", "SR",
             "Southern Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
-    "624": ("rpc_tp_er", "ER RPC(TP)/Standing Committee",
+    "624": ("rpc_tp_er", "ER",
             "Eastern Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
-    "625": ("rpc_tp_ner", "NER RPC(TP)/Standing Committee",
+    "625": ("rpc_tp_ner", "NER",
             "North Eastern Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
 }
 
@@ -69,19 +70,30 @@ def discover_pdfs(url):
     urls = []
     for m in meetings:
         number = str(m.get("meetingNo") or "").strip() or "unnumbered"
-        for kind, field in (("minutes of the meeting", "minutesOfMeetingPathEn"), ("corrigendum", "corrigendumPathEn")):
-            path = m.get(field)
+        subject = (m.get("subjectOfMeetingEn") or "").strip().lower()
+        # regional feeds hold two numbered series: the older Standing Committee and the newer RPC(TP)
+        series = "Standing Committee" if "standing" in subject else "RPC(TP)" if "power committee" in subject else ""
+        name = " ".join(x for x in (short, series) if x)
+        files = [
+            ("minutes of the meeting", m.get("minutesOfMeetingPathEn")),
+            ("corrigendum", m.get("corrigendumPathEn")),
+        ]
+        for a in sorted(m.get("attachments") or [], key=lambda a: a.get("sequenceNo") or 0):
+            kind = (a.get("attachmentType") or "attachment").replace("_", " ").lower()
+            files.append((f"{kind} {a.get('sequenceNo') or ''}".strip(), a.get("filePathEn")))
+        for kind, path in files:
             if not path:
                 continue
             file_url = _file_url(path)
             if file_url in _FILE_META:
                 continue
             _FILE_META[file_url] = {
-                "title": f"{short} meeting {number} - {kind}",
+                "title": f"{name} meeting {number} - {kind}",
                 "frontmatter": {
                     "committee": full,
                     "meeting_no": number,
                     "document_type": kind,
+                    "source_file_name": path.rsplit("/", 1)[-1],
                     "meeting_date": m.get("meetingDate") or "",
                     "subject": (m.get("subjectOfMeetingEn") or "").strip(),
                 },
