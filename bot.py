@@ -22,7 +22,7 @@ from pathlib import Path
 import requests
 import yaml
 
-from adapters import ctu, ctu_gna
+from adapters import cea, ctu, ctu_gna
 from config import BASE_DIR, GNA_DIR, KB_ROOT, SYSTEM_DIR, tesseract_cmd
 
 # ---------------------------------------------------------------------------
@@ -37,6 +37,7 @@ OUTPUT_DIR = KB_ROOT
 ADAPTERS = {
     "CTU": ctu,
     "CTU_GNA": ctu_gna,
+    "CEA": cea,
 }
 
 DOWNLOAD_HEADERS = {
@@ -269,6 +270,8 @@ def output_dir_for(adapter, repository, url):
     if repository == "CTU":
         return OUTPUT_DIR
     sub = adapter.output_subdir(url) if hasattr(adapter, "output_subdir") else repository.lower()
+    if repository == "CEA":
+        return OUTPUT_DIR / "cea" / sub
     return GNA_DIR / "documents" / sub
 
 
@@ -357,7 +360,8 @@ def process_row(row_index, url, repository, report):
                 f"{', via OCR' if used_ocr else ''})."
             )
 
-            fallback_title = Path(pdf_url).stem.replace("%20", " ")
+            fallback_title = adapter.title_for(pdf_url) if hasattr(adapter, "title_for") else None
+            fallback_title = fallback_title or Path(pdf_url).stem.replace("%20", " ")
             metadata = extract_metadata(markdown_text, fallback_title)
             needs_review = metadata["needs_review"] or used_ocr
 
@@ -371,6 +375,8 @@ def process_row(row_index, url, repository, report):
                 "doc_reference": metadata["doc_reference"],
                 "needs_review": needs_review,
             }
+            if hasattr(adapter, "extra_frontmatter"):
+                frontmatter.update(adapter.extra_frontmatter(pdf_url))
 
             out_dir.mkdir(parents=True, exist_ok=True)
             filename = build_filename(repository, metadata["title"])
