@@ -39,6 +39,13 @@ COMMITTEES = {
             "North Eastern Region Power Committee (Transmission Planning) / Standing Committee on Power System Planning"),
 }
 
+# Files CEA's server cannot deliver in full. They are skipped so a known gap does not raise an alert
+# every week. Re-test occasionally; remove an entry once the file downloads completely.
+KNOWN_UNAVAILABLE = {
+    "npcMinutes-7.pdf": "about 168 MB; the server cuts the connection partway (tried 2026-11-12/13 from GitHub and from a PC) "
+                        "and ignores resume requests, so only a truncated, unreadable file can be fetched",
+}
+
 _FILE_META = {}  # file URL -> {"title": ..., "frontmatter": {...}}
 
 
@@ -83,6 +90,8 @@ def discover_pdfs(url):
             files.append((f"{kind} {a.get('sequenceNo') or ''}".strip(), a.get("filePathEn")))
         for kind, path in files:
             if not path:
+                continue
+            if path.rsplit("/", 1)[-1] in KNOWN_UNAVAILABLE:
                 continue
             file_url = _file_url(path)
             if file_url in _FILE_META:
