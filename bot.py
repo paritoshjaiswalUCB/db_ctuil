@@ -23,6 +23,7 @@ import requests
 import yaml
 
 from adapters import cea, ctu, ctu_gna
+from convert import table_aware
 from config import BASE_DIR, GNA_DIR, KB_ROOT, SYSTEM_DIR, tesseract_cmd
 
 # ---------------------------------------------------------------------------
@@ -350,10 +351,16 @@ def process_row(row_index, url, repository, report):
 
             try:
                 table_markdown = adapter.convert_pdf(tmp_pdf_path) if hasattr(adapter, "convert_pdf") else None
+                conv_meta = {}
                 if table_markdown:
                     markdown_text, used_ocr = table_markdown, False
                 else:
-                    markdown_text, used_ocr = convert_pdf_to_markdown(tmp_pdf_path)
+                    try:
+                        markdown_text, conv_meta = table_aware.convert(tmp_pdf_path)
+                        used_ocr = bool(conv_meta["scanned_pages"])
+                    except Exception as exc:  # noqa: BLE001 - keep the document, even if only as plain text
+                        logger.warning(f"  table-aware conversion failed ({exc}); using plain text")
+                        markdown_text, used_ocr = convert_pdf_to_markdown(tmp_pdf_path)
             finally:
                 tmp_pdf_path.unlink(missing_ok=True)
 
@@ -377,6 +384,7 @@ def process_row(row_index, url, repository, report):
                 "doc_reference": metadata["doc_reference"],
                 "needs_review": needs_review,
             }
+            frontmatter.update(conv_meta)
             if hasattr(adapter, "extra_frontmatter"):
                 frontmatter.update(adapter.extra_frontmatter(pdf_url))
                 # a meeting date given by the source is more reliable than the first date found in the text
