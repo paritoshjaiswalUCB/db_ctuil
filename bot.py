@@ -165,7 +165,9 @@ def convert_pdf_to_markdown(pdf_path):
 # ---------------------------------------------------------------------------
 
 DATE_PATTERNS = [
-    r"\b(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})\b",   # DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY
+    # DD.MM.YYYY / DD-MM-YYYY / DD/MM/YYYY. A date glued to letters ("14/1/2021-NPC", "15/2/2018-PSPA-II") is a
+    # CEA file number, not a date.
+    r"\b(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})\b(?!-?[A-Za-z&])",
     r"\b(\d{1,2}(?:st|nd|rd|th)?\s+\w+\s+\d{4})\b",  # 5th September 2026
 ]
 
@@ -377,6 +379,10 @@ def process_row(row_index, url, repository, report):
             }
             if hasattr(adapter, "extra_frontmatter"):
                 frontmatter.update(adapter.extra_frontmatter(pdf_url))
+                # a meeting date given by the source is more reliable than the first date found in the text
+                m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", str(frontmatter.get("meeting_date") or ""))
+                if m:
+                    frontmatter["date"] = f"{m.group(3)}.{m.group(2)}.{m.group(1)}"
 
             out_dir.mkdir(parents=True, exist_ok=True)
             filename = build_filename(repository, metadata["title"])
