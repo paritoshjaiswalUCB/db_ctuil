@@ -11,6 +11,7 @@ Scanned pages are read with Tesseract meanwhile.
 
 import io
 import os
+from concurrent.futures.process import BrokenProcessPool
 
 import pymupdf
 
@@ -30,7 +31,11 @@ def _ocr(page):
 def convert(pdf_path):
     doc = pymupdf.open(str(pdf_path))
     try:
-        pages = hc.convert_pages(doc, range(len(doc)), ocr=None, path=str(pdf_path), workers=os.cpu_count() or 1)
+        try:
+            pages = hc.convert_pages(doc, range(len(doc)), ocr=None, path=str(pdf_path), workers=os.cpu_count() or 1)
+        except BrokenProcessPool:
+            # a worker died, usually out of memory on a large file: redo it one page at a time in this process
+            pages = hc.convert_pages(doc, range(len(doc)), ocr=None, path=str(pdf_path), workers=1)
         scanned = []
         for p in pages:  # the parallel pass leaves scanned pages empty; read them with Tesseract here
             if p["info"].get("scanned"):
