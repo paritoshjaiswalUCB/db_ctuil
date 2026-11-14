@@ -17,7 +17,9 @@ import pymupdf
 
 from convert import hybrid_convert as hc
 
-CONVERTER = "hybrid-v1"
+# v2 = same converter on PyMuPDF 1.28.2; files marked hybrid-v1 were made on PyMuPDF 2.1, which dropped decimal points
+# in table cells, and are re-converted
+CONVERTER = "hybrid-v2"
 
 
 def _ocr(page):

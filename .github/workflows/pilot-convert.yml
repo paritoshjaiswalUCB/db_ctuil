@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q tesseract-ocr
-          pip install pymupdf pytesseract Pillow requests
+          pip install pymupdf==1.28.2 pytesseract Pillow requests
 
       - name: Convert the pilot files
         run: python convert/pilot.py

@@ -60,7 +60,7 @@ def candidates():
             front, body = split(text)
             if not front or front.get("converter") == table_aware.CONVERTER or not front.get("original_url"):
                 continue
-            if group == "gna" and TABLE_ROW.search(body):
+            if group == "gna" and TABLE_ROW.search(body) and not str(front.get("converter", "")).startswith("hybrid"):
                 continue  # already converted with tables by the GNA table converter
             yield p, front
 

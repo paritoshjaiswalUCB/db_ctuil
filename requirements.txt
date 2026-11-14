@@ -7,4 +7,5 @@ Pillow>=10.0
 numpy>=1.26
 sentence-transformers>=3.0
 pdfplumber>=0.11
-pymupdf>=1.24
+# pinned: 2.x reads table cells differently (decimal points and dashes dropped: "16.61 MW" -> "1661MW")
+pymupdf==1.28.2
