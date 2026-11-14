@@ -23,7 +23,10 @@ CONVERTER = "hybrid-v1"
 def _ocr(page):
     import pytesseract
     from PIL import Image
-    pix = page.get_pixmap(dpi=300)
+    # 300 dpi, lowered for oversized sheets (large maps) so the image stays under Pillow's ~179 MP safety limit
+    inches2 = (page.rect.width / 72) * (page.rect.height / 72)
+    dpi = int(min(300, (150e6 / inches2) ** 0.5))
+    pix = page.get_pixmap(dpi=dpi)
     # --psm 6 keeps each printed line together, so a row label stays with its figures (as in order-search)
     return pytesseract.image_to_string(Image.open(io.BytesIO(pix.tobytes("png"))), config="--psm 6").strip()
 
