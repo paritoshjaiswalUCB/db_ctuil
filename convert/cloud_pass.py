@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from config import KB_ROOT, SYSTEM_DIR  # noqa: E402
-from convert import hybrid_convert as hc  # noqa: E402
+
 from convert import table_aware  # noqa: E402
 from convert.reconvert import join, split  # noqa: E402
 from bot import download_pdf  # noqa: E402
@@ -181,6 +181,61 @@ def read_cloud(gem, doc, pages):
     return got
 
 
+# ---------------------------------------------------------------- number guard
+# order-search's guard (hybrid_convert.choose_page) with two corrections found on CEA/CTU minutes (diagnosis 15 Nov 2026):
+# (1) a number is counted whether or not a unit is glued to it ("1150kV" and "1150 kV" are the same 1150);
+# (2) numbers in a running header/footer (e.g. the CEA file number "13/3/2019 ... I/71340/2026" printed on every page) are
+#     not expected in the page body, so they are left out.
+GUARD_VERSION = 2          # pages kept local under an older guard are asked again
+GUARD_NUM = re.compile(r"(?<![\d.,])\d[\d,]*(?:\.\d+)?")
+MARGIN_PT = 60
+
+
+def guard_numbers(text):
+    from collections import Counter
+    body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    toks = [t.replace(",", "").rstrip(".") for t in GUARD_NUM.findall(body)]
+    return Counter(t for t in toks if len(t.replace(".", "")) >= 3 or "." in t)
+
+
+def _margin_text(page):
+    h = page.rect.height
+    return "\n".join(b[4] for b in page.get_text("blocks") if b[6] == 0 and (b[1] > h - MARGIN_PT * 1.5 or b[3] < MARGIN_PT))
+
+
+def running_numbers(doc):
+    """Numbers printed in the top/bottom margin of at least half the pages (running header/footer)."""
+    from collections import Counter
+    if len(doc) < 4:
+        return set()
+    seen = Counter()
+    for page in doc:
+        seen.update(set(guard_numbers(_margin_text(page))))
+    return {k for k, c in seen.items() if c >= 0.5 * len(doc)}
+
+
+def guard_truth(page, running):
+    truth = guard_numbers(page.get_text("text"))
+    if running:
+        margin = guard_numbers(_margin_text(page))
+        for k in running:
+            truth[k] -= margin.get(k, 0)
+    return +truth
+
+
+def recall(truth, md):
+    total = sum(truth.values())
+    if not total:
+        return 1.0
+    out = guard_numbers(md)
+    return sum(min(c, out[k]) for k, c in truth.items()) / total
+
+
+def choose(truth, local_md, cloud_md):
+    rc, rl = recall(truth, cloud_md), recall(truth, local_md)
+    return ("cloud", rc) if rc >= 0.999 or rc >= rl else ("local", rl)
+
+
 # ---------------------------------------------------------------- markdown pages
 def body_pages(body):
     """-> (head, [(page_no, marker_line, content)]) for a body made of '<!-- page N -->' sections."""
@@ -201,6 +256,7 @@ def apply(front, body, doc, got):
     head, sections = body_pages(body)
     lists = {k: list(front.get(k) or []) for k in ("cloud_replaced", "cloud_unchecked", "cloud_kept_local", "cloud_empty")}
     new = []
+    running = running_numbers(doc)
     for no, marker, content in sections:
         if no in got:
             cloud = got[no]
@@ -209,7 +265,7 @@ def apply(front, body, doc, got):
             if not cloud:
                 lists["cloud_empty"].append(no)
             else:
-                chosen, source, _ = hc.choose_page(pdf_text, content, cloud)
+                source, _ = choose(guard_truth(doc[no - 1], running), content, cloud)
                 if source == "cloud":
                     content = f"{prefix}\n\n{cloud}".strip() if prefix else cloud
                     lists["cloud_unchecked" if len(pdf_text.strip()) < 80 else "cloud_replaced"].append(no)
@@ -220,6 +276,7 @@ def apply(front, body, doc, got):
     for k, v in lists.items():
         if v:
             front[k] = sorted(set(v))
+    front["cloud_guard"] = GUARD_VERSION
     front["cloud_model"] = MODEL
     front["cloud_date"] = date.today().isoformat()
     if front.get("needs_review") and not set(front.get("scanned_pages") or []) - set(lists["cloud_unchecked"]):
@@ -234,13 +291,24 @@ def _sort_key(front):
     return (m.group(3) + m.group(2) + m.group(1)) if m else "00000000"
 
 
+def requeue(front):
+    """Pages kept local under an older number guard go back into cloud_pages."""
+    kept = front.get("cloud_kept_local") or []
+    if kept and front.get("cloud_guard") != GUARD_VERSION:
+        front["cloud_pages"] = sorted(set(front.get("cloud_pages") or []) | set(kept))
+        front.pop("cloud_kept_local")
+    front.setdefault("cloud_pages", [])
+    front["cloud_pages"] = front["cloud_pages"] or []
+    return front
+
+
 def candidates():
     paths = [p for p in KB_ROOT.glob("*.md") if p.name not in SKIP_NAMES]
     paths += list((KB_ROOT / "cea").rglob("*.md")) + list((KB_ROOT / "gna" / "documents").rglob("*.md"))
     found = []
     for p in paths:
         front, _ = split(p.read_text(encoding="utf-8"))
-        if front and front.get("converter") == table_aware.CONVERTER and front.get("cloud_pages") and front.get("original_url"):
+        if front and front.get("converter") == table_aware.CONVERTER and front.get("original_url") and requeue(front)["cloud_pages"]:
             found.append((_sort_key(front), p))
     return [p for _, p in sorted(found, key=lambda x: x[0], reverse=True)]
 
@@ -266,6 +334,7 @@ def main():
             stop = "time budget used up"
             break
         front, body = split(path.read_text(encoding="utf-8"))
+        front = requeue(front)
         host = urlparse(front["original_url"]).netloc
         if down.get(host, 0) >= 5:
             continue
