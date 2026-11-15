@@ -1,0 +1,70 @@
+# Phase 2: Gemini re-reads the pages the local converter found hard (convert/cloud_pass.py), with a number guard.
+# Runs daily just after Google's daily quota resets (midnight Pacific = 13:30 IST), and on request. Shares the weekly
+# job's concurrency group so jobs never write to Drive at the same time. Needs the GEMINI_API_KEY secret.
+name: Cloud read (Gemini)
+
+on:
+  schedule:
+    - cron: "15 8 * * *"  # 13:45 IST
+  workflow_dispatch:
+    inputs:
+      cap:
+        description: "Most Gemini requests to use today (shared quota with order-search)"
+        default: "250"
+
+concurrency:
+  group: weekly-update
+  cancel-in-progress: false
+
+jobs:
+  cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      KB_ROOT: ${{ github.workspace }}/kb
+      DRIVE_PATH: "gdrive:db_cmets_meetings"
+      PYTHONIOENCODING: utf-8
+      GEMINI_MODEL: gemini-3.1-flash-lite
+      GEMINI_DAILY_CAP: ${{ github.event.inputs.cap || '250' }}
+      CLOUD_BUDGET_MIN: "290"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q rclone
+
+      - name: Install Python packages
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Configure Drive access
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+
+      - name: Pull knowledge base from Drive
+        run: rclone copy "$DRIVE_PATH" "$KB_ROOT" --transfers 8 --stats-one-line --stats 30s
+
+      - name: Read hard pages with Gemini
+        timeout-minutes: 300
+        run: python -m convert.cloud_pass
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Update search index
+        if: always()
+        run: python rag/build_index.py
+
+      - name: Push changes back to Drive
+        if: always()
+        run: rclone copy "$KB_ROOT" "$DRIVE_PATH" --transfers 8 --stats-one-line --stats 30s

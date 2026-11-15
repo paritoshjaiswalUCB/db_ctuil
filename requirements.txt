@@ -9,3 +9,4 @@ sentence-transformers>=3.0
 pdfplumber>=0.11
 # pinned: 2.x reads table cells differently (decimal points and dashes dropped: "16.61 MW" -> "1661MW")
 pymupdf==1.28.2
+google-genai>=1.0
