@@ -1,0 +1,42 @@
+# Diagnosis of the Gemini number guard on chosen pages of one PDF (convert/cloud_diag.py). No Drive access.
+name: Cloud diagnosis
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "PDF url"
+        required: true
+      pages:
+        description: "Pages, e.g. 3,6,10"
+        required: true
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install pymupdf==1.28.2 google-genai requests PyYAML beautifulsoup4 pypdfium2 pytesseract Pillow pdfplumber
+
+      - name: Diagnose
+        run: python -m convert.cloud_diag
+        env:
+          DIAG_URL: ${{ github.event.inputs.url }}
+          DIAG_PAGES: ${{ github.event.inputs.pages }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PYTHONIOENCODING: utf-8
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-diag-${{ github.run_number }}
+          path: convert/diag_out/
+          if-no-files-found: ignore
