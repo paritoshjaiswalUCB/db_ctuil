@@ -23,7 +23,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install tools
-        run: pip install pymupdf==1.28.2 google-genai requests PyYAML beautifulsoup4 pypdfium2 pytesseract Pillow pdfplumber
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
+          pip install pymupdf==1.28.2 google-genai requests PyYAML beautifulsoup4 pypdfium2 pytesseract Pillow pdfplumber
 
       - name: Diagnose
         run: python -m convert.cloud_diag

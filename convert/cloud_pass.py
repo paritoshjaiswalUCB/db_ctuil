@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from config import KB_ROOT, SYSTEM_DIR  # noqa: E402
 
+from convert import hybrid_convert as hc  # noqa: E402
 from convert import table_aware  # noqa: E402
 from convert.reconvert import join, split  # noqa: E402
 from bot import download_pdf  # noqa: E402
@@ -186,7 +187,7 @@ def read_cloud(gem, doc, pages):
 # (1) a number is counted whether or not a unit is glued to it ("1150kV" and "1150 kV" are the same 1150);
 # (2) numbers in a running header/footer (e.g. the CEA file number "13/3/2019 ... I/71340/2026" printed on every page) are
 #     not expected in the page body, so they are left out.
-GUARD_VERSION = 2          # pages kept local under an older guard are asked again
+GUARD_VERSION = 3          # 2: running header/footer numbers ignored; 3: word check, scans compared with Tesseract
 GUARD_NUM = re.compile(r"(?<![\d.,])\d[\d,]*(?:\.\d+)?")
 MARGIN_PT = 60
 
@@ -231,9 +232,77 @@ def recall(truth, md):
     return sum(min(c, out[k]) for k, c in truth.items()) / total
 
 
-def choose(truth, local_md, cloud_md):
+# Word check (guard v3, 17 Nov 2026): the number check alone let Gemini drop sentences without figures ("Members agreed
+# for the same"). Every word of 3+ letters in the PDF text layer must also be in Gemini's version; allowed exceptions are
+# words of the running header/footer and pieces of words hyphenated across a line break ("connectiv-" + "ity").
+WORD = re.compile(r"[A-Za-z]{3,}")
+WORD_SLACK = 0             # no word may be lost beyond what the local version also misses (user rule: no information loss)
+
+
+def guard_words(text):
+    from collections import Counter
+    body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    body = re.sub(r"(?<=[A-Za-z])-\s*(?=[A-Za-z])", "", body)   # "non-solar", "non-\nsolar", "connectiv-\nity" alike
+    return Counter(w.lower() for w in WORD.findall(body))
+
+
+def running_words(doc):
+    from collections import Counter
+    if len(doc) < 4:
+        return set()
+    seen = Counter()
+    for page in doc:
+        seen.update(set(guard_words(_margin_text(page))))
+    return {k for k, c in seen.items() if c >= 0.5 * len(doc)}
+
+
+def word_truth(page, running_w):
+    truth = guard_words(page.get_text("text"))
+    if running_w:
+        margin = guard_words(_margin_text(page))
+        for k in running_w:
+            truth[k] -= margin.get(k, 0)
+    return +truth
+
+
+def missing_words(truth, md):
+    out = guard_words(md)
+    longer = [w for w in out if len(w) > 3]
+    miss = {}
+    for k, c in truth.items():
+        if out[k] >= c:
+            continue
+        if any(k in w and w != k for w in longer):
+            continue                                 # a piece of a word that was hyphenated or split across lines
+        miss[k] = c - out[k]
+    return miss
+
+
+def choose(truth, local_md, cloud_md, wtruth=None):
+    """-> (source, reason). Gemini's version is used only if it keeps every number and every word the local version keeps."""
     rc, rl = recall(truth, cloud_md), recall(truth, local_md)
-    return ("cloud", rc) if rc >= 0.999 or rc >= rl else ("local", rl)
+    if not (rc >= 0.999 or rc >= rl):
+        return "local", f"numbers {rc:.3f} < local {rl:.3f}"
+    if wtruth is not None:
+        mc, ml = sum(missing_words(wtruth, cloud_md).values()), sum(missing_words(wtruth, local_md).values())
+        if mc > ml + WORD_SLACK:
+            return "local", f"{mc} words missing (local {ml})"
+    return "cloud", "ok"
+
+
+# Scanned pages have no text layer, so Gemini is compared with the Tesseract reading instead: two independent readers.
+# If they agree on the figures, Gemini's (better structured) version is used. If not, both readings are kept on the page
+# and the page is listed in cloud_scan_disagree, so nothing rests on one unchecked reading.
+SCAN_AGREE = 0.90
+
+
+def scan_agreement(tess_md, cloud_md):
+    t, c = guard_numbers(tess_md), guard_numbers(cloud_md)
+    nt, nc = sum(t.values()), sum(c.values())
+    common = sum(min(v, c[k]) for k, v in t.items())
+    covered = common / nt if nt else 1.0             # Tesseract's figures found in Gemini (nothing dropped)
+    supported = common / nc if nc else 1.0           # Gemini's figures found in Tesseract (nothing invented)
+    return covered, supported
 
 
 # ---------------------------------------------------------------- markdown pages
@@ -252,36 +321,86 @@ def build_body(head, sections):
     return head + "\n".join(f"{marker}\n\n{content}\n" for _, marker, content in sections)
 
 
-def apply(front, body, doc, got):
-    head, sections = body_pages(body)
-    lists = {k: list(front.get(k) or []) for k in ("cloud_replaced", "cloud_unchecked", "cloud_kept_local", "cloud_empty")}
-    new = []
-    running = running_numbers(doc)
-    for no, marker, content in sections:
-        if no in got:
-            cloud = got[no]
-            pdf_text = doc[no - 1].get_text("text")
-            prefix = "\n\n".join(re.findall(r"<!-- table continues from page \d+ -->", content))
-            if not cloud:
-                lists["cloud_empty"].append(no)
-            else:
-                source, _ = choose(guard_truth(doc[no - 1], running), content, cloud)
-                if source == "cloud":
-                    content = f"{prefix}\n\n{cloud}".strip() if prefix else cloud
-                    lists["cloud_unchecked" if len(pdf_text.strip()) < 80 else "cloud_replaced"].append(no)
-                else:
-                    lists["cloud_kept_local"].append(no)
-        new.append((no, marker, content))
-    front["cloud_pages"] = [p for p in front.get("cloud_pages") or [] if p not in got]
-    for k, v in lists.items():
-        if v:
-            front[k] = sorted(set(v))
+LISTS = ("cloud_replaced", "cloud_kept_local", "cloud_scan_agreed", "cloud_scan_disagree", "cloud_empty")
+SECOND_READING = "<!-- second reading of this scanned page (Tesseract OCR): the two readings disagree on figures; check the PDF -->"
+
+
+def _is_scanned(page):
+    return len(page.get_text("text").strip()) < 80
+
+
+def _decide(page, running, local_md, cloud_md):
+    """-> (list name, page content) for one page with both a local and a Gemini version."""
+    rn, rw = running
+    if _is_scanned(page):
+        covered, supported = scan_agreement(local_md, cloud_md)
+        if covered >= SCAN_AGREE and supported >= SCAN_AGREE:
+            return "cloud_scan_agreed", cloud_md
+        return "cloud_scan_disagree", f"{cloud_md}\n\n{SECOND_READING}\n\n{local_md}"
+    source, _ = choose(guard_truth(page, rn), local_md, cloud_md, word_truth(page, rw))
+    return ("cloud_replaced", cloud_md) if source == "cloud" else ("cloud_kept_local", local_md)
+
+
+def _finish(front, lists):
+    for k in LISTS:
+        if lists[k]:
+            front[k] = sorted(set(lists[k]))
+        else:
+            front.pop(k, None)
+    front.pop("cloud_unchecked", None)
     front["cloud_guard"] = GUARD_VERSION
     front["cloud_model"] = MODEL
     front["cloud_date"] = date.today().isoformat()
-    if front.get("needs_review") and not set(front.get("scanned_pages") or []) - set(lists["cloud_unchecked"]):
-        front["needs_review"] = "scanned pages read by Gemini; figures not checked against a text layer"
-    return front, build_body(head, new)
+    if lists["cloud_scan_disagree"]:
+        front["needs_review"] = (f"scanned pages {sorted(set(lists['cloud_scan_disagree']))}: Gemini and Tesseract disagree "
+                                 "on figures; both readings are kept on the page")
+    return front
+
+
+def apply(front, body, doc, got):
+    head, sections = body_pages(body)
+    lists = {k: [p for p in (front.get(k) or []) if p not in got] for k in LISTS}
+    running = (running_numbers(doc), running_words(doc))
+    new = []
+    for no, marker, content in sections:
+        if no in got:
+            prefix = "\n\n".join(re.findall(r"<!-- table continues from page \d+ -->", content))
+            if not got[no]:
+                lists["cloud_empty"].append(no)
+            else:
+                name, chosen = _decide(doc[no - 1], running, content, got[no])
+                lists[name].append(no)
+                if name != "cloud_kept_local":
+                    content = f"{prefix}\n\n{chosen}".strip() if prefix else chosen
+        new.append((no, marker, content))
+    front["cloud_pages"] = [p for p in front.get("cloud_pages") or [] if p not in got]
+    return _finish(front, lists), build_body(head, new)
+
+
+def needs_recheck(front):
+    return (front.get("cloud_guard") or 0) < GUARD_VERSION and bool(front.get("cloud_replaced") or front.get("cloud_unchecked"))
+
+
+def recheck(front, body, doc):
+    """Pages accepted under an older guard are checked again with the current one; no Gemini requests are needed. The
+    local version is rebuilt from the PDF (and Tesseract for scanned pages); a page that fails gets it back."""
+    head, sections = body_pages(body)
+    old = set(front.get("cloud_replaced") or []) | set(front.get("cloud_unchecked") or [])
+    lists = {k: [p for p in (front.get(k) or []) if p not in old] for k in LISTS}
+    running = (running_numbers(doc), running_words(doc))
+    rebuilt = {r["idx"] + 1: r["md"] for r in hc.convert_pages(doc, [p - 1 for p in sorted(old)])}
+    new, restored = [], 0
+    for no, marker, content in sections:
+        if no in old:
+            prefix = "\n\n".join(re.findall(r"<!-- table continues from page \d+ -->", content))
+            cloud_md = re.sub(r"<!-- table continues from page \d+ -->", "", content).strip()
+            local_md = table_aware._ocr(doc[no - 1]) if _is_scanned(doc[no - 1]) else rebuilt.get(no, "")
+            name, chosen = _decide(doc[no - 1], running, local_md, cloud_md)
+            lists[name].append(no)
+            restored += name == "cloud_kept_local"
+            content = f"{prefix}\n\n{chosen}".strip() if prefix else chosen
+        new.append((no, marker, content))
+    return _finish(front, lists), build_body(head, new), restored
 
 
 # ---------------------------------------------------------------- main
@@ -294,7 +413,7 @@ def _sort_key(front):
 def requeue(front):
     """Pages kept local under an older number guard go back into cloud_pages."""
     kept = front.get("cloud_kept_local") or []
-    if kept and front.get("cloud_guard") != GUARD_VERSION:
+    if kept and (front.get("cloud_guard") or 0) < 2:          # guard 1 rejected pages for footer numbers: ask again
         front["cloud_pages"] = sorted(set(front.get("cloud_pages") or []) | set(kept))
         front.pop("cloud_kept_local")
     front.setdefault("cloud_pages", [])
@@ -308,7 +427,8 @@ def candidates():
     found = []
     for p in paths:
         front, _ = split(p.read_text(encoding="utf-8"))
-        if front and front.get("converter") == table_aware.CONVERTER and front.get("original_url") and requeue(front)["cloud_pages"]:
+        if (front and front.get("converter") == table_aware.CONVERTER and front.get("original_url")
+                and (needs_recheck(front) or requeue(front)["cloud_pages"])):
             found.append((_sort_key(front), p))
     return [p for _, p in sorted(found, key=lambda x: x[0], reverse=True)]
 
@@ -321,7 +441,7 @@ def main():
     state = _load(STATE_FILE)
     gem = Gemini()
     start = time.time()
-    files = pages_done = 0
+    files = pages_done = rechecked = 0
     down = {}
     todo = candidates()
     print(f"{len(todo)} files have pages for the cloud step; used today on {MODEL}: {used_today()}/{DAILY_CAP}", flush=True)
@@ -347,6 +467,16 @@ def main():
             print(f"   download failed: {str(exc)[:150]}", flush=True)
             continue
         doc = pymupdf.open(stream=pdf, filetype="pdf")
+        if needs_recheck(front):
+            front, body, restored = recheck(front, body, doc)
+            path.write_text(join(front, body.lstrip("\n")), encoding="utf-8")
+            rechecked += 1
+            print(f"   re-checked earlier Gemini pages: {restored} given back the local version; agreed scans "
+                  f"{len(front.get('cloud_scan_agreed') or [])}, disagreeing scans {len(front.get('cloud_scan_disagree') or [])}",
+                  flush=True)
+        if not front["cloud_pages"] or stop:
+            doc.close()
+            continue
         try:
             got = read_cloud(gem, doc, front["cloud_pages"])
         except DailyLimit as exc:
@@ -364,16 +494,14 @@ def main():
             path.write_text(join(front, body.lstrip("\n")), encoding="utf-8")
             pages_done += len(got)
             files += 1
-            print(f"   read {len(got)} pages: replaced {len(front.get('cloud_replaced') or [])}, kept local "
-                  f"{len(front.get('cloud_kept_local') or [])}, unchecked scans {len(front.get('cloud_unchecked') or [])}, "
-                  f"empty {len(front.get('cloud_empty') or [])} (file totals)", flush=True)
+            print(f"   read {len(got)} pages (file totals: " + ", ".join(
+                f"{k.removeprefix('cloud_')} {len(front.get(k) or [])}" for k in LISTS) + ")", flush=True)
         doc.close()
-        if stop:
-            break
+        # after the daily limit the loop goes on only to re-check earlier pages (no Gemini requests needed)
     if stop:
-        print(f"Stopped: {stop}", flush=True)
+        print(f"Gemini stopped: {stop}", flush=True)
     left = len(candidates())
-    print(f"\nCloud step: {files} files, {pages_done} pages read with {gem.requests} requests "
+    print(f"\nCloud step: re-checked {rechecked} files; {files} files, {pages_done} pages read with {gem.requests} requests "
           f"({used_today()}/{DAILY_CAP} used today); {left} files still have pages to read "
           f"({(time.time() - start) / 60:.0f} min).", flush=True)
 

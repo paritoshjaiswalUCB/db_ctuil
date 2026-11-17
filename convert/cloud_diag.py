@@ -47,7 +47,12 @@ def main():
     pdf.write_bytes(download_pdf(os.environ["DIAG_URL"]))
     doc = pymupdf.open(str(pdf))
     running = cp.running_numbers(doc)
+    from convert import table_aware
     local = {r["idx"] + 1: r["md"] for r in hc.convert_pages(doc, [p - 1 for p in pages])}
+    for p in pages:
+        if cp._is_scanned(doc[p - 1]):
+            local[p] = table_aware._ocr(doc[p - 1])
+    run_all = (running, cp.running_words(doc))
     cp.used_today = lambda: 0
     cp.count_request = lambda: None
     gem = cp.Gemini()
@@ -63,7 +68,18 @@ def main():
         wt = words(text)
         wc, wmiss_c = coverage(wt, cloud)
         wl, wmiss_l = coverage(wt, loc)
-        lines += [f"## page {p}  (choice: {cp.choose(truth, loc, cloud)[0]})",
+        decision = cp._decide(doc[p - 1], run_all, loc, cloud)[0] if cloud else "cloud_empty"
+        if cp._is_scanned(doc[p - 1]):
+            cov, sup = cp.scan_agreement(loc, cloud)
+            t_n = cp.guard_numbers(loc)
+            lines += [f"## page {p} (scanned)  (decision: {decision})",
+                      f"- Tesseract figures found in Gemini: {cov:.3f}; Gemini figures found in Tesseract: {sup:.3f}",
+                      f"- Tesseract-only figures: {dict(list({k: v - c_n[k] for k, v in t_n.items() if c_n[k] < v}.items())[:15])}",
+                      f"- Gemini-only figures: {dict(list({k: v - t_n[k] for k, v in c_n.items() if t_n[k] < v}.items())[:15])}", ""]
+            (OUT / f"p{p}_cloud.md").write_text(cloud, encoding="utf-8")
+            (OUT / f"p{p}_local.md").write_text(loc, encoding="utf-8")
+            continue
+        lines += [f"## page {p}  (decision: {decision})",
                   f"- numbers: {sum(truth.values())}; cloud recall {cp.recall(truth, cloud):.3f}, local {cp.recall(truth, loc):.3f}",
                   f"- words: {sum(wt.values())}; cloud coverage {wc:.3f}, local {wl:.3f}",
                   f"- numbers missing in cloud: {miss_c}",

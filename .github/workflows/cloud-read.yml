@@ -38,7 +38,7 @@ jobs:
       - name: Install system tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q rclone
+          sudo apt-get install -y -q rclone tesseract-ocr
 
       - name: Install Python packages
         run: |
