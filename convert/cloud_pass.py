@@ -293,7 +293,8 @@ def choose(truth, local_md, cloud_md, wtruth=None):
 # Scanned pages have no text layer, so Gemini is compared with the Tesseract reading instead: two independent readers.
 # If they agree on the figures, Gemini's (better structured) version is used. If not, both readings are kept on the page
 # and the page is listed in cloud_scan_disagree, so nothing rests on one unchecked reading.
-SCAN_AGREE = 0.90
+SCAN_COVERED = 1.0         # every figure Tesseract read must be in Gemini's version (diagnosis 17 Nov: Gemini drops tables on scans)
+SCAN_SUPPORTED = 0.95      # nearly every figure of Gemini's version must also be in Tesseract's reading
 
 
 def scan_agreement(tess_md, cloud_md):
@@ -334,7 +335,7 @@ def _decide(page, running, local_md, cloud_md):
     rn, rw = running
     if _is_scanned(page):
         covered, supported = scan_agreement(local_md, cloud_md)
-        if covered >= SCAN_AGREE and supported >= SCAN_AGREE:
+        if covered >= SCAN_COVERED and supported >= SCAN_SUPPORTED:
             return "cloud_scan_agreed", cloud_md
         return "cloud_scan_disagree", f"{cloud_md}\n\n{SECOND_READING}\n\n{local_md}"
     source, _ = choose(guard_truth(page, rn), local_md, cloud_md, word_truth(page, rw))
