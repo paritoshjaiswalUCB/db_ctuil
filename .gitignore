@@ -9,3 +9,4 @@ backfill_state.json
 NEEDS_ATTENTION.md
 _tmp_download.pdf
 rag/index/
+convert/engine_out/

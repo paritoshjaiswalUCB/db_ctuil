@@ -1,0 +1,75 @@
+# Head-to-head of PDF readers (local converter, Gemini, Docling, Marker) on known hard pages, scored with the strict
+# no-loss check (convert/engine_test.py). Manual only. No Drive access; results are kept as a run artifact.
+name: Reader test
+
+on:
+  workflow_dispatch:
+    inputs:
+      samples:
+        description: "Samples to run (blank = all): sr47,wr46,nr47,sr42,npc18"
+        default: ""
+
+env:
+  PYTHONIOENCODING: utf-8
+  ENGINE_SAMPLES: ${{ github.event.inputs.samples }}
+  BASE_PKGS: pymupdf==1.28.2 google-genai requests PyYAML beautifulsoup4 pypdfium2 pytesseract Pillow pdfplumber
+
+jobs:
+  read:
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [local, docling, marker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install $BASE_PKGS
+          if [ "${{ matrix.engine }}" = docling ]; then pip install docling; fi
+          if [ "${{ matrix.engine }}" = marker ]; then pip install marker-pdf; fi
+          pip list 2>/dev/null | grep -iE '^(docling|docling-core|marker-pdf|surya-ocr|pymupdf|torch) ' || true
+      - name: Read pages
+        run: python -m convert.engine_test read ${{ matrix.engine }}
+        env:
+          GEMINI_API_KEY: ${{ matrix.engine == 'local' && secrets.GEMINI_API_KEY || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-${{ matrix.engine }}
+          path: |
+            convert/engine_out/
+            !convert/engine_out/pdf/
+          if-no-files-found: ignore
+
+  score:
+    needs: read
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install $BASE_PKGS
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+          path: convert/engine_out
+      - name: Score
+        run: python -m convert.engine_test score
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-report
+          path: |
+            convert/engine_out/
+            !convert/engine_out/pdf/
